@@ -133,36 +133,48 @@ Host:www.guet.edu.cn (CRLF)
 Connection:Keep-Alive (CRLF)  
 (CRLF)  
 
-3、响应报头
-响应报头允许服务器传递不能放在状态行中的附加响应信息，以及关于服务器的信息和对Request-URI所标识的资源进行下一步访问的信息。
-常用的响应报头
-Location
-Location响应报头域用于重定向接受者到一个新的位置。Location响应报头域常用在更换域名的时候。
-Server
-Server响应报头域包含了服务器用来处理请求的软件信息。与User-Agent请求报头域是相对应的。下面是
-Server响应报头域的一个例子：
-Server：Apache-Coyote/1.1
-WWW-Authenticate
-WWW-Authenticate响应报头域必须被包含在401（未授权的）响应消息中，客户端收到401响应消息时候，并发送Authorization报头域请求服务器对其进行验证时，服务端响应报头就包含该报头域。
-eg：WWW-Authenticate:Basic realm="Basic Auth Test!"  //可以看出服务器对请求资源采用的是基本验证机制。
+3、响应报头  
+响应报头允许服务器传递不能放在状态行中的附加响应信息，以及关于服务器的信息和对Request-URI所标识的资源进行下一步访问的信息。  
+常用的响应报头  
+
+Location  
+Location响应报头域用于重定向接受者到一个新的位置。Location响应报头域常用在更换域名的时候。  
+
+Server  
+Server响应报头域包含了服务器用来处理请求的软件信息。与User-Agent请求报头域是相对应的。下面是Server响应报头域的一个例子：  
+Server：Apache-Coyote/1.1  
+
+WWW-Authenticate  
+WWW-Authenticate响应报头域必须被包含在401（未授权的）响应消息中，客户端收到401响应消息时候，并发送Authorization报头域请求服务器对其进行验证时，服务端响应报头就包含该报头域。  
+eg：WWW-Authenticate:Basic realm="Basic Auth Test!"  //可以看出服务器对请求资源采用的是基本验证机制。  
 
 
-4、实体报头
-请求和响应消息都可以传送一个实体。一个实体由实体报头域和实体正文组成，但并不是说实体报头域和实体正文要在一起发送，可以只发送实体报头域。实体报头定义了关于实体正文（eg：有无实体正文）和请求所标识的资源的元信息。
-常用的实体报头
-Content-Encoding
-Content-Encoding实体报头域被用作媒体类型的修饰符，它的值指示了已经被应用到实体正文的附加内容的编码，因而要获得Content-Type报头域中所引用的媒体类型，必须采用相应的解码机制。Content-Encoding这样用于记录文档的压缩方法，eg：Content-Encoding：gzip
-Content-Language
-Content-Language实体报头域描述了资源所用的自然语言。没有设置该域则认为实体内容将提供给所有的语言阅读
-者。eg：Content-Language:da
-Content-Length
-Content-Length实体报头域用于指明实体正文的长度，以字节方式存储的十进制数字来表示。
-Content-Type
-Content-Type实体报头域用语指明发送给接收者的实体正文的媒体类型。eg：
-Content-Type:text/html;charset=ISO-8859-1
-Content-Type:text/html;charset=GB2312
-Last-Modified
-Last-Modified实体报头域用于指示资源的最后修改日期和时间。
-Expires
-Expires实体报头域给出响应过期的日期和时间。为了让代理服务器或浏览器在一段时间以后更新缓存中(再次访问曾访问过的页面时，直接从缓存中加载，缩短响应时间和降低服务器负载)的页面，我们可以使用Expires实体报头域指定页面过期的时间。eg：Expires：Thu，15 Sep 2006 16:23:12 GMT
-HTTP1.1的客户端和缓存必须将其他非法的日期格式（包括0）看作已经过期。eg：为了让浏览器不要缓存页面，我们也可以利用Expires实体报头域，设置为0，jsp中程序如下：response.setDateHeader("Expires","0");
+4、实体报头  
+请求和响应消息都可以传送一个实体。一个实体由实体报头域和实体正文组成，但并不是说实体报头域和实体正文要在一起发送，可以只发送实体报头域。实体报头定义了关于实体正文（eg：有无实体正文）和请求所标识的资源的元信息。  
+
+常用的实体报头  
+
+Content-Encoding  
+Content-Encoding实体报头域被用作媒体类型的修饰符，它的值指示了已经被应用到实体正文的附加内容的编码，因而要获得Content-Type报头域中所引用的媒体类型，必须采用相应的解码机制。Content-Encoding这样用于记录文档的压缩方法，eg：Content-Encoding：gzip  
+
+Content-Language  
+Content-Language实体报头域描述了资源所用的自然语言。没有设置该域则认为实体内容将提供给所有的语言阅读者。  
+eg：Content-Language:da  
+
+Content-Length  
+Content-Length实体报头域用于指明实体正文的长度，以字节方式存储的十进制数字来表示。  
+
+Content-Type  
+Content-Type实体报头域用语指明发送给接收者的实体正文的媒体类型。  
+eg：   
+Content-Type:text/html;charset=ISO-8859-1  
+Content-Type:text/html;charset=GB2312  
+
+Last-Modified  
+Last-Modified实体报头域用于指示资源的最后修改日期和时间。  
+
+Expires  
+Expires实体报头域给出响应过期的日期和时间。为了让代理服务器或浏览器在一段时间以后更新缓存中(再次访问曾访问过的页面时，直接从缓存中加载，缩短响应时间和降低服务器负载)的页面，我们可以使用Expires实体报头域指定页面过期的时间。  
+eg：Expires：Thu，15 Sep 2006 16:23:12 GMT  
+HTTP1.1的客户端和缓存必须将其他非法的日期格式（包括0）看作已经过期。eg：为了让浏览器不要缓存页面，我们也可以利用Expires实体报头域，设置为0，jsp中程序如下：response.setDateHeader("Expires","0");  
+ 
