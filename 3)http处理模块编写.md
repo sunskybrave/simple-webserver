@@ -73,23 +73,24 @@ b.消息报头（可选）
 c.空行（只有CRLF的行）  
 d.消息正文（可选）  
 
-HTTP消息报头包括普通报头、请求报头、响应报头、实体报头。
-每一个报头域都是由名字+“：”+空格+值 组成，消息报头域的名字是大小写无关的。
+HTTP消息报头包括普通报头、请求报头、响应报头、实体报头。  
+每一个报头域都是由名字+“：”+空格+值 组成，消息报头域的名字是大小写无关的。  
 
 1、普通报头
 在普通报头中，有少数报头域用于所有的请求和响应消息，但并不用于被传输的实体，只用于传输的消息。
 eg：
-Cache-Control   用于指定缓存指令，缓存指令是单向的（响应中出现的缓存指令在请求中未必会出现），且是独立的（一个消息的缓存指令不会影响另一个消息处理的缓存机制），HTTP1.0使用的类似的报头域为Pragma。
-请求时的缓存指令包括：no-cache（用于指示请求或响应消息不能缓存）、no-store、max-age、max-stale、min-fresh、only-if-cached;
-响应时的缓存指令包括：public、private、no-cache、no-store、no-transform、must-revalidate、proxy-revalidate、max-age、s-maxage.
-eg：为了指示IE浏览器（客户端）不要缓存页面，服务器端的JSP程序可以编写如下：response.sehHeader("Cache-Control","no-cache");
-//response.setHeader("Pragma","no-cache");作用相当于上述代码，通常两者//合用
-这句代码将在发送的响应消息中设置普通报头域：Cache-Control:no-cache
+Cache-Control   用于指定缓存指令，缓存指令是单向的（响应中出现的缓存指令在请求中未必会出现），且是独立的（一个消息的缓存指令不会影响另一个消息处理的缓存机制），HTTP1.0使用的类似的报头域为Pragma。  
 
+请求时的缓存指令包括：no-cache（用于指示请求或响应消息不能缓存）、no-store、max-age、max-stale、min-fresh、only-if-cached;  
 
-Date普通报头域表示消息产生的日期和时间
+响应时的缓存指令包括：public、private、no-cache、no-store、no-transform、must-revalidate、proxy-revalidate、max-age、s-maxage.  
+eg：为了指示IE浏览器（客户端）不要缓存页面，服务器端的JSP程序可以编写如下：response.sehHeader("Cache-Control","no-cache");  
+//response.setHeader("Pragma","no-cache");作用相当于上述代码，通常两者//合用  
+这句代码将在发送的响应消息中设置普通报头域：Cache-Control:no-cache  
 
-Connection普通报头域允许发送指定连接的选项。例如指定连接是连续，或者指定“close”选项，通知服务器，在响应完成后，关闭连接
+Date普通报头域表示消息产生的日期和时间  
+
+Connection普通报头域允许发送指定连接的选项。例如指定连接是连续，或者指定“close”选项，通知服务器，在响应完成后，关闭连接  
 
 2、请求报头
 请求报头允许客户端向服务器端传递请求的附加信息以及客户端自身的信息。
