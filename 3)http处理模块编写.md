@@ -9,8 +9,6 @@ HTTP协议的主要特点可概括如下：
 5.无状态：HTTP协议是无状态协议。无状态是指协议对于事务处理没有记忆能力。缺少状态意味着如果后续处理需要前面的信息，则它必须重传，这样可能导致每次连接传送的数据量增大。另一方面，在服务器不需要先前信息时它的应答就较快。  
 
 
-代理连接这块，是http1.1的特性，是一个改良。因为http是应用层的协议，基于TCP之上，所以对TCP的优化对HTTP同样管用。Keep-alive就是在一个tcp连接之上允许传输多个http请求，所以当一个tcp连接建立的时候，不会在http请求之后断开，而是保持一段时间。
-
 # 2.http请求
  http请求由三部分组成，分别是：请求行、消息报头、请求正文  
 
@@ -119,17 +117,21 @@ Host：www.guet.edu.cn
 
 User-Agent  
 我们上网登陆论坛的时候，往往会看到一些欢迎信息，其中列出了你的操作系统的名称和版本，你所使用的浏览器的名称和版本，这往往让很多人感到很神奇，实际上，服务器应用程序就是从User-Agent这个请求报头域中获取到这些信息。User-Agent请求报头域允许客户端将它的操作系统、浏览器和其它属性告诉服务器。不过，这个报头域不是必需的，如果我们自己编写一个浏览器，不使用User-Agent请求报头域，那么服务器端就无法得知我们的信息了。  
-请求报头举例：
-GET /form.html HTTP/1.1 (CRLF)
-Accept:image/gif,image/x-xbitmap,image/jpeg,application/x-shockwave-flash,application/vnd.ms-excel,application/vnd.ms-powerpoint,application/msword,*/* (CRLF)
-Accept-Language:zh-cn (CRLF)
-Accept-Encoding:gzip,deflate (CRLF)
-If-Modified-Since:Wed,05 Jan 2007 11:21:25 GMT (CRLF)
-If-None-Match:W/"80b1a4c018f3c41:8317" (CRLF)
-User-Agent:Mozilla/4.0(compatible;MSIE6.0;Windows NT 5.0) (CRLF)
-Host:www.guet.edu.cn (CRLF)
-Connection:Keep-Alive (CRLF)
-(CRLF)
+
+Connection  
+Keep-alive就是在一个tcp连接之上允许传输多个http请求，所以当一个tcp连接建立的时候，不会在http请求之后断开，而是保持一段时间。  
+
+请求报头举例：  
+GET /form.html HTTP/1.1 (CRLF)  
+Accept:image/gif,image/x-xbitmap,image/jpeg,application/x-shockwave-flash,application/vnd.ms-excel,application/vnd.ms-powerpoint,application/msword,*/* (CRLF)  
+Accept-Language:zh-cn (CRLF)  
+Accept-Encoding:gzip,deflate (CRLF)  
+If-Modified-Since:Wed,05 Jan 2007 11:21:25 GMT (CRLF)  
+If-None-Match:W/"80b1a4c018f3c41:8317" (CRLF)  
+User-Agent:Mozilla/4.0(compatible;MSIE6.0;Windows NT 5.0) (CRLF)  
+Host:www.guet.edu.cn (CRLF)  
+Connection:Keep-Alive (CRLF)  
+(CRLF)  
 
 3、响应报头
 响应报头允许服务器传递不能放在状态行中的附加响应信息，以及关于服务器的信息和对Request-URI所标识的资源进行下一步访问的信息。
