@@ -220,3 +220,717 @@ Http指纹识别工具Httprint,它通过运用统计学原理,组合模糊的逻
 
 6、其他：为了提高用户使用浏览器时的性能，现代浏览器还支持并发的访问方式，浏览一个网页时同时建立多个连接，以迅速获得一个网页上的多个图标，这样能更快速完成整个网页的传输。  
 HTTP1.1中提供了这种持续连接的方式，而下一代HTTP协议：HTTP-NG更增加了有关会话控制、丰富的内容协商等方式的支持，来提供更高效率的连接。  
+
+# 6.程序源码  
+此处的代码使用之前章节编写的日志功能
+
+```c++
+#ifndef HTTPCON_H_
+#define HTTPCON_H_
+
+extern "C" {
+  #include <stdio.h>
+  #include <stdlib.h>
+  #include "unpthread.h"
+}
+
+#include <iostream>
+#include <queue>
+#include <sys/epoll.h>
+#include <unistd.h>
+#include <signal.h>
+#include <sys/types.h>
+#include <sys/epoll.h>
+#include <fcntl.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <assert.h>
+#include <sys/stat.h>
+#include <string.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/mman.h>
+#include <stdarg.h>
+#include <errno.h>
+#include "locker.h"
+#include "Serverlog.h"
+
+class Httpcon {
+public:
+    static const int FILENAME_LEN = 200;
+    static const int READ_BUFFER_SIZE = 2048;
+    static const int WRITE_BUFFER_SIZE = 1024;
+    enum METHOD { GET = 0, POST, HEAD, PUT, DELETE, TRACE, OPTIONS, CONNECT, PATCH }; //只实现了GET
+    enum CHECK_STATE { CHECK_STATE_REQUESTLINE = 0, CHECK_STATE_HEADER, CHECK_STATE_CONTENT }; //请求行、消息报头、请求正文
+    enum HTTP_CODE { NO_REQUEST, GET_REQUEST, BAD_REQUEST, NO_RESOURCE, FORBIDDEN_REQUEST, FILE_REQUEST, INTERNAL_ERROR, CLOSED_CONNECTION };
+    enum LINE_STATUS { LINE_OK = 0, LINE_BAD, LINE_OPEN };//读到一个完整行，行出错和行数据尚不完整
+
+public:
+    Httpcon(){}
+    ~Httpcon(){}
+    void init( int sockfd, sockaddr	 *addr );
+    void set_log(Serverlog *m_log){log=m_log;}
+    void close_conn( bool real_close = true );
+    void process();
+    bool read();
+    bool write();
+
+private:
+    void init();
+    HTTP_CODE process_read();
+    bool process_write( HTTP_CODE ret );
+
+    HTTP_CODE parse_request_line( char* text );
+    HTTP_CODE parse_headers( char* text );
+    HTTP_CODE parse_content( char* text );
+    HTTP_CODE do_request();
+    char* get_line() { return m_read_buf + m_start_line; }
+    LINE_STATUS parse_line();
+
+    void unmap();
+    bool add_response( const char* format, ... );
+    bool add_content( const char* content );
+    bool add_status_line( int status, const char* title );
+    bool add_headers( int content_length );
+    bool add_content_length( int content_length );
+    bool add_linger();
+    bool add_blank_line();
+
+public:
+    static int m_epollfd;
+    static int m_user_count;
+    bool event_type;
+    Serverlog *log; //日志
+
+private:
+    int m_sockfd;
+    sockaddr_in m_address;
+
+    char m_read_buf[ READ_BUFFER_SIZE ];
+    int m_read_idx; //读取到的数据的字节数
+    int m_checked_idx; //当前检查到的位置
+    int m_start_line;
+    char m_write_buf[ WRITE_BUFFER_SIZE ];
+    int m_write_idx;
+
+    CHECK_STATE m_check_state;
+    METHOD m_method;
+
+    char m_real_file[ FILENAME_LEN ];
+    char* m_url;
+    char* m_version;
+    char* m_host;
+    int m_content_length;
+    bool m_linger;
+
+    char* m_file_address;
+    struct stat m_file_stat;
+    struct iovec m_iv[2];
+    int m_iv_count;
+};
+
+#endif /* HTTPCON_H_ */
+
+
+#include "Httpcon.h"
+
+const char* ok_200_title = "OK";
+const char* error_400_title = "Bad Request";
+const char* error_400_form = "Your request has bad syntax or is inherently impossible to satisfy.\n";
+const char* error_403_title = "Forbidden";
+const char* error_403_form = "You do not have permission to get file from this server.\n";
+const char* error_404_title = "Not Found";
+const char* error_404_form = "The requested file was not found on this server.\n";
+const char* error_500_title = "Internal Error";
+const char* error_500_form = "There was an unusual problem serving the requested file.\n";
+const char* doc_root = "/var/www";
+
+int setnonblocking( int fd )
+{
+    int old_option = fcntl( fd, F_GETFL );
+    int new_option = old_option | O_NONBLOCK;
+    fcntl( fd, F_SETFL, new_option );
+    return old_option;
+}
+
+void addfd( int epollfd, int fd, bool one_shot )
+{
+    epoll_event event;
+    event.data.fd = fd;
+    event.events = EPOLLIN | EPOLLET | EPOLLRDHUP;
+    if( one_shot )
+    {
+        event.events |= EPOLLONESHOT;
+    }
+    epoll_ctl( epollfd, EPOLL_CTL_ADD, fd, &event );
+    setnonblocking( fd );  //注意都是非阻塞I/O
+}
+
+void removefd( int epollfd, int fd )
+{
+    epoll_ctl( epollfd, EPOLL_CTL_DEL, fd, 0 );
+    close( fd );
+}
+
+void modfd( int epollfd, int fd, int ev )
+{
+    epoll_event event;
+    event.data.fd = fd;
+    event.events = ev | EPOLLET | EPOLLONESHOT | EPOLLRDHUP;
+    epoll_ctl( epollfd, EPOLL_CTL_MOD, fd, &event );
+}
+
+int Httpcon::m_user_count = 0;
+int Httpcon::m_epollfd = -1;
+
+void Httpcon::close_conn( bool real_close )
+{
+    if( real_close && ( m_sockfd != -1 ) )
+    {
+        //modfd( m_epollfd, m_sockfd, EPOLLIN );
+        removefd( m_epollfd, m_sockfd );
+        m_sockfd = -1;
+        m_user_count--;
+    }
+}
+
+void Httpcon::init( int sockfd, sockaddr	*addr )  //初始化函数
+{
+    m_sockfd = sockfd;
+    m_address = *(sockaddr_in*)addr;
+    int error = 0;
+    socklen_t len = sizeof( error );
+    getsockopt( m_sockfd, SOL_SOCKET, SO_ERROR, &error, &len );
+    //SO_REUSEADDR允许启动一个监听服务器并捆绑其众所周知的端口，即使以前建立的将该端口用作他们的本地端口的连接仍存在。
+    //主要用途是方便服务器的重启
+    int reuse = 1;
+    setsockopt( m_sockfd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof( reuse ) );
+    addfd( m_epollfd, sockfd, true );  //在epoll中注册
+    m_user_count++;
+
+    init();
+}
+
+void Httpcon::init()  //初始化函数
+{
+    m_check_state = CHECK_STATE_REQUESTLINE;  //一开始检查request行
+    m_linger = false;
+
+    m_method = GET;
+    m_url = 0;
+    m_version = 0;
+    m_content_length = 0;
+    m_host = 0;
+    m_start_line = 0;
+    m_checked_idx = 0;
+    m_read_idx = 0;
+    m_write_idx = 0;
+    memset( m_read_buf, '\0', READ_BUFFER_SIZE );
+    memset( m_write_buf, '\0', WRITE_BUFFER_SIZE );
+    memset( m_real_file, '\0', FILENAME_LEN );
+}
+
+Httpcon::LINE_STATUS Httpcon::parse_line()  //判断状态：读到一个完整行，行出错和行数据尚不完整
+{
+	//正常行结尾都是/r/n ,这是判断依据
+    char temp;
+    for ( ; m_checked_idx < m_read_idx; ++m_checked_idx )
+    {
+        temp = m_read_buf[ m_checked_idx ];
+        if ( temp == '\r' )
+        {
+            if ( ( m_checked_idx + 1 ) == m_read_idx )
+            {
+                return LINE_OPEN; //行数据尚不完整
+            }
+            else if ( m_read_buf[ m_checked_idx + 1 ] == '\n' )
+            {
+                m_read_buf[ m_checked_idx++ ] = '\0';
+                m_read_buf[ m_checked_idx++ ] = '\0';
+                return LINE_OK; //读到一个完整行
+            }
+
+            return LINE_BAD; //行出错
+        }
+        else if( temp == '\n' )
+        {
+            if( ( m_checked_idx > 1 ) && ( m_read_buf[ m_checked_idx - 1 ] == '\r' ) )
+            {
+                m_read_buf[ m_checked_idx-1 ] = '\0';
+                m_read_buf[ m_checked_idx++ ] = '\0';
+                return LINE_OK; //读到一个完整行
+            }
+            return LINE_BAD; //行出错
+        }
+    }
+
+    return LINE_OPEN;
+}
+
+bool Httpcon::read()  //读取套接字缓冲区，直到数据全读完，读不到数据或出错返回false
+{
+    if( m_read_idx >= READ_BUFFER_SIZE )
+    {
+        return false;
+    }
+
+    int bytes_read = 0;
+    while( true )
+    {
+    	bytes_read = recv( m_sockfd, m_read_buf + m_read_idx, READ_BUFFER_SIZE - m_read_idx, 0 );
+    	if ( bytes_read == -1 )
+        {
+    		if( errno == EAGAIN || errno == EWOULDBLOCK )
+            {
+    			log->append_log((std::string)"WARN\tsockfd "+std::to_string(m_sockfd)+(std::string)" Noblockling io read  EAGAIN\t"+(std::string)__FILE__+std::to_string(__LINE__));
+    			break;
+            }
+    		log->append_log((std::string)"ERROR\tsockfd "+std::to_string(m_sockfd)+(std::string)" Noblockling io read  error0= "+std::to_string(errno)+(std::string)"\t"+(std::string)__FILE__+std::to_string(__LINE__));
+    		return false;
+        }
+    	else if ( bytes_read == 0 )
+        {
+    		log->append_log((std::string)"ERROR\tsockfd "+std::to_string(m_sockfd)+(std::string)" Noblockling io read  EOF\t"+(std::string)__FILE__+std::to_string(__LINE__));
+            return false;
+        }
+    	m_read_idx += bytes_read;
+    	printf("Httpcon::read %d\n",bytes_read);
+    }
+   return true;
+}
+
+Httpcon::HTTP_CODE Httpcon::parse_request_line( char* text )  //处理http请求行
+{
+    m_url = strpbrk( text, " \t" );
+    if ( ! m_url )
+    {
+        return BAD_REQUEST;
+    }
+    *m_url++ = '\0';
+
+    char* method = text;
+    if ( strcasecmp( method, "GET" ) == 0 )
+    {
+        m_method = GET;
+    }
+    else
+    {
+        return BAD_REQUEST;
+    }
+
+    m_url += strspn( m_url, " \t" );
+    m_version = strpbrk( m_url, " \t" );
+    if ( ! m_version )
+    {
+        return BAD_REQUEST;
+    }
+
+    *m_version++ = '\0';
+    m_version += strspn( m_version, " \t" );
+    if ( strcasecmp( m_version, "HTTP/1.1" ) != 0 )
+    {
+        return BAD_REQUEST;
+    }
+
+    if ( strncasecmp( m_url, "http://", 7 ) == 0 )
+    {
+        m_url += 7;
+        m_url = strchr( m_url, '/' );
+    }
+
+    if ( ! m_url || m_url[ 0 ] != '/' )
+    {
+        return BAD_REQUEST;
+    }
+
+    m_check_state = CHECK_STATE_HEADER;
+    return NO_REQUEST;
+}
+
+Httpcon::HTTP_CODE Httpcon::parse_headers( char* text )
+{
+    if( text[ 0 ] == '\0' )  //这是用来处理请求头部和请求数据之间的空行
+    {
+        if ( m_method == HEAD )
+        {
+            return GET_REQUEST;
+        }
+
+        if ( m_content_length != 0 )
+        {
+            m_check_state = CHECK_STATE_CONTENT;
+            return NO_REQUEST;
+        }
+
+        return GET_REQUEST;
+    }
+    else if ( strncasecmp( text, "Connection:", 11 ) == 0 )
+    {
+        text += 11;
+        text += strspn( text, " \t" );
+        if ( strcasecmp( text, "keep-alive" ) == 0 )
+        {
+            m_linger = true;
+        }
+    }
+    else if ( strncasecmp( text, "Content-Length:", 15 ) == 0 )
+    {
+        text += 15;
+        text += strspn( text, " \t" );
+        m_content_length = atol( text );
+    }
+    else if ( strncasecmp( text, "Host:", 5 ) == 0 )
+    {
+        text += 5;
+        text += strspn( text, " \t" );
+        m_host = text;
+    }
+    else
+    {
+        printf( "oop! unknow header %s\n", text );
+    }
+
+    return NO_REQUEST;
+
+}
+
+Httpcon::HTTP_CODE Httpcon::parse_content( char* text )
+{
+    if ( m_read_idx >= ( m_content_length + m_checked_idx ) )
+    {
+        text[ m_content_length ] = '\0';
+        return GET_REQUEST;
+    }
+
+    return NO_REQUEST;
+}
+
+Httpcon::HTTP_CODE Httpcon::process_read() //处理可读
+{
+    LINE_STATUS line_status = LINE_OK;
+    HTTP_CODE ret = NO_REQUEST;
+    char* text = 0;
+
+    while ( ( ( m_check_state == CHECK_STATE_CONTENT ) && ( line_status == LINE_OK  ) )  //有限逻辑器，注意条件1成立则不执行条件2，很巧妙
+                || ( ( line_status = parse_line() ) == LINE_OK ) )
+    {
+        text = get_line(); //当前需要处理行的启始位置
+        m_start_line = m_checked_idx; //下次需要处理行的启始位置
+        printf( "got 1 http line: %s\n", text );
+        log->append_log((std::string)"INFO\tsockfd "+std::to_string(m_sockfd)+(std::string)" get_one_http_line "+(std::string)text+(std::string)"\t"+(std::string)__FILE__+std::to_string(__LINE__));
+
+        switch ( m_check_state )
+        {
+            case CHECK_STATE_REQUESTLINE: //处理http请求行
+            {
+                ret = parse_request_line( text );
+                if ( ret == BAD_REQUEST )
+                {
+                	printf("parse_request_line:BAD_REQUEST\n");
+                    return BAD_REQUEST;
+                }
+                printf("parse_request_line:NO_REQUEST\n");
+
+                break;
+            }
+            case CHECK_STATE_HEADER: //处理消息报头，其中也处理了请求头部和请求数据之间的空行
+            {
+                ret = parse_headers( text );
+                if ( ret == BAD_REQUEST )
+                {
+                	printf("parse_headers:BAD_REQUEST\n");
+                    return BAD_REQUEST;
+                }
+                else if ( ret == GET_REQUEST )
+                {
+                	printf("parse_headers:GET_REQUEST\n");
+                    return do_request(); //处理请求
+                }
+                break;
+            }
+            case CHECK_STATE_CONTENT: //处理消息正文
+            {
+                ret = parse_content( text );
+                if ( ret == GET_REQUEST )
+                {
+                	printf("parse_content:GET_REQUEST\n");
+                    return do_request(); //处理请求
+                }
+                line_status = LINE_OPEN;
+                printf("parse_content:NO_REQUEST\n");
+                break;
+            }
+            default:
+            {
+            	printf("process_read:INTERNAL_ERROR\n");
+                return INTERNAL_ERROR;
+            }
+        }
+    }
+
+    printf("process_read:NO_REQUEST\n");
+    return NO_REQUEST; //请求不充分，需要继续读取
+}
+
+Httpcon::HTTP_CODE Httpcon::do_request()  //处理请求，此处是查找资源
+{
+    strcpy( m_real_file, doc_root );
+    int len = strlen( doc_root );
+    strncpy( m_real_file + len, m_url, FILENAME_LEN - len - 1 );
+    if ( stat( m_real_file, &m_file_stat ) < 0 )
+    {
+    	printf("file %s NO_RESOURCE\n",m_real_file);
+        return NO_RESOURCE;
+    }
+
+    if ( ! ( m_file_stat.st_mode & S_IROTH ) )
+    {
+    	printf("file %s FORBIDDEN_REQUEST\n",m_real_file);
+        return FORBIDDEN_REQUEST;
+    }
+
+    if ( S_ISDIR( m_file_stat.st_mode ) )
+    {
+    	printf("file %s BAD_REQUEST\n",m_real_file);
+        return BAD_REQUEST;
+    }
+
+    int fd = open( m_real_file, O_RDONLY ); //先调用fd再mmap
+    m_file_address = ( char* )mmap( 0, m_file_stat.st_size, PROT_READ, MAP_PRIVATE, fd, 0 );  //mmap共享内存
+    close( fd );
+    printf("file available %s FILE_REQUEST\n",m_real_file);
+    return FILE_REQUEST;
+}
+
+void Httpcon::unmap()
+{
+    if( m_file_address )
+    {
+        munmap( m_file_address, m_file_stat.st_size );
+        m_file_address = 0;
+    }
+}
+
+bool Httpcon::write()  //发出http响应给客户
+{
+    int temp = 0;
+    int bytes_have_send = 0;
+    int bytes_to_send = m_write_idx+m_file_stat.st_size; //此行做修改
+    printf("bytes_to_send %d\n",bytes_to_send);
+    if ( bytes_to_send == 0 )
+    {
+        modfd( m_epollfd, m_sockfd, EPOLLIN );
+        init();
+        return true;
+    }
+
+    while( 1 )
+    {
+        temp = writev( m_sockfd, m_iv, m_iv_count ); //分散写
+        if ( temp <= -1 )
+        {
+            if( errno == EAGAIN ) //如果写阻塞，则再次设置监听可写
+            {
+            	   printf("request write EAGAIN,need to wait EPOLLOUT\n");
+            	   log->append_log((std::string)"WARN\tsockfd "+std::to_string(m_sockfd)+(std::string)" request write EAGAIN,need to wait EPOLLOUT\t"+(std::string)__FILE__+std::to_string(__LINE__));
+                modfd( m_epollfd, m_sockfd, EPOLLOUT );
+                return true;
+            }
+            unmap();
+            printf("request write error\n");
+            log->append_log((std::string)"ERROR\tsockfd "+std::to_string(m_sockfd)+(std::string)" request write error\t"+(std::string)__FILE__+std::to_string(__LINE__));
+            return false;
+        }
+
+        bytes_have_send += temp;
+
+        printf("temp %d , bytes_to_send %d , bytes_have_send %d \n",temp,bytes_to_send,bytes_have_send);
+
+        if ( bytes_to_send == bytes_have_send ) //在原来程序的基础上做了修改，改正了错误
+          {
+            unmap();
+            if( m_linger )  //keep alive 需要保持连接
+            {
+                init(); //调用init,准备接受后续的http请求
+                modfd( m_epollfd, m_sockfd, EPOLLIN );
+                printf("request write success, now keep-alive\n");
+                log->append_log((std::string)"INFO\tsockfd "+std::to_string(m_sockfd)+(std::string)" request write success, now keep-alive\t"+(std::string)__FILE__+std::to_string(__LINE__));
+                return true;
+            }
+            else  //不需要保持连接
+            {
+                //modfd( m_epollfd, m_sockfd, EPOLLIN );  //这行错了，不需要继续监听
+            	   printf("request write success, now close connect\n");
+            	   log->append_log((std::string)"INFO\tsockfd "+std::to_string(m_sockfd)+(std::string)" request write success, now close connect\t"+(std::string)__FILE__+std::to_string(__LINE__));
+                return false;
+            }
+        }
+    }
+}
+
+bool Httpcon::add_response( const char* format, ... )
+{
+    if( m_write_idx >= WRITE_BUFFER_SIZE )
+    {
+        return false;
+    }
+    va_list arg_list;
+    va_start( arg_list, format );
+    int len = vsnprintf( m_write_buf + m_write_idx, WRITE_BUFFER_SIZE - 1 - m_write_idx, format, arg_list );
+    if( len >= ( WRITE_BUFFER_SIZE - 1 - m_write_idx ) )
+    {
+        return false;
+    }
+    m_write_idx += len;
+    va_end( arg_list );
+    return true;
+}
+
+bool Httpcon::add_status_line( int status, const char* title )
+{
+    return add_response( "%s %d %s\r\n", "HTTP/1.1", status, title );
+}
+
+bool Httpcon::add_headers( int content_len )  //添加回复内容
+{
+    add_content_length( content_len ); //添加消息报头
+    add_linger(); //添加消息报头
+    add_blank_line();  //添加空行
+
+    return true;
+}
+
+bool Httpcon::add_content_length( int content_len ) //添加消息报头
+{
+    return add_response( "Content-Length: %d\r\n", content_len );
+}
+
+bool Httpcon::add_linger() //添加消息报头
+{
+    return add_response( "Connection: %s\r\n", ( m_linger == true ) ? "keep-alive" : "close" );
+}
+
+bool Httpcon::add_blank_line() //添加消息报头
+{
+    return add_response( "%s", "\r\n" );
+}
+
+bool Httpcon::add_content( const char* content )
+{
+    return add_response( "%s", content );
+}
+
+bool Httpcon::process_write( HTTP_CODE ret )  //处理http写事件
+{
+    switch ( ret )
+    {
+        case INTERNAL_ERROR:
+        {
+        	printf("process_write:INTERNAL_ERROR\n");
+
+            add_status_line( 500, error_500_title );
+            add_headers( strlen( error_500_form ) );
+            if ( ! add_content( error_500_form ) )
+            {
+                return false;
+            }
+            break;
+        }
+        case BAD_REQUEST:
+        {
+        	printf("process_write:BAD_REQUEST\n");
+            add_status_line( 400, error_400_title );
+            add_headers( strlen( error_400_form ) );
+            if ( ! add_content( error_400_form ) )
+            {
+                return false;
+            }
+            break;
+        }
+        case NO_RESOURCE:
+        {
+        	printf("process_write:NO_RESOURCE\n");
+            add_status_line( 404, error_404_title );
+            add_headers( strlen( error_404_form ) );
+            if ( ! add_content( error_404_form ) )
+            {
+                return false;
+            }
+            break;
+        }
+        case FORBIDDEN_REQUEST:
+        {
+        	printf("process_write:FORBIDDEN_REQUEST\n");
+            add_status_line( 403, error_403_title );
+            add_headers( strlen( error_403_form ) );
+            if ( ! add_content( error_403_form ) )
+            {
+                return false;
+            }
+            break;
+        }
+        case FILE_REQUEST:
+        {
+        	printf("process_write:FILE_REQUEST\n");
+            add_status_line( 200, ok_200_title );  //添加状态行
+            if ( m_file_stat.st_size != 0 )  //文件字节数
+            {
+                add_headers( m_file_stat.st_size );
+                m_iv[ 0 ].iov_base = m_write_buf;  //指向一个缓冲区
+                m_iv[ 0 ].iov_len = m_write_idx;  //指向接受的最大长度或者实际写入的长度
+                m_iv[ 1 ].iov_base = m_file_address; //指向一个缓冲区
+                m_iv[ 1 ].iov_len = m_file_stat.st_size; //指向接受的最大长度或者实际写入的长度
+                m_iv_count = 2;
+                return true;
+            }
+            else
+            {
+                const char* ok_string = "<html><body></body></html>";
+                add_headers( strlen( ok_string ) );
+                if ( ! add_content( ok_string ) )
+                {
+                    return false;
+                }
+            }
+
+            break; //添加的，源代码错了
+        }
+        default:
+        {
+        	printf("process_write:default");
+            return false;
+        }
+    }
+
+    m_iv[ 0 ].iov_base = m_write_buf;
+    m_iv[ 0 ].iov_len = m_write_idx;
+    m_iv_count = 1;
+    return true;
+}
+
+void Httpcon::process()  //实际处理函数
+{
+    HTTP_CODE read_ret = process_read();  //判断请求的类型
+    if ( read_ret == NO_REQUEST ) //如果数据不全则继续监听可读
+    {
+    	  printf("NO_REQUEST,keep EPOLLIN\n");
+    	  log->append_log((std::string)"ERROR\tsockfd "+std::to_string(m_sockfd)+(std::string)" NO_REQUEST,keep EPOLLIN\t"+(std::string)__FILE__+std::to_string(__LINE__));
+        modfd( m_epollfd, m_sockfd, EPOLLIN );
+        return;
+    }
+
+    log->append_log((std::string)"INFO\tsockfd "+std::to_string(m_sockfd)+(std::string)" GET_REQUEST\t"+(std::string)__FILE__+std::to_string(__LINE__));
+    bool write_ret = process_write( read_ret );
+    if ( ! write_ret )
+    {
+    	log->append_log((std::string)"ERROR\tsockfd "+std::to_string(m_sockfd)+(std::string)" process_write fail\t"+(std::string)__FILE__+std::to_string(__LINE__));
+        close_conn();
+    }
+
+    log->append_log((std::string)"INFO\tsockfd "+std::to_string(m_sockfd)+(std::string)" process_write success\t"+(std::string)__FILE__+std::to_string(__LINE__));
+    modfd( m_epollfd, m_sockfd, EPOLLOUT );
+}
+
+```
