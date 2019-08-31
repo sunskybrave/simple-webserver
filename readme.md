@@ -17,7 +17,6 @@ while(server running)
         将此连接设置为non-blocking;
         为此连接设置event(EPOLLIN | EPOLLET ...);
         将此连接加入epoll监听队列;
-        从线程池取一个空闲工作者线程并处理此连接;
     }
     else if(读请求)
     {
